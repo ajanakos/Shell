@@ -1,0 +1,233 @@
+goal
+The main goal of this program is to create a simple shell within FreBSD. We will be
+implementing a series of system calls to create a shell like program. In doing so
+we will gain an integral understanding of creating subprocesses along with redirecting
+input and output. The exercise also teached up how to let processes communicate via
+pipes. My main goal with this program is to further warm myself up the many system calls
+I have yet to use which we will be most lilely using in future assignments of higher
+complexity
+
+Assumptions
+The program is run in a FreeBSD environment. We also assume the user only needs the
+simple subset of shell functionality we are offering. The user is expected to not enter
+in a massive command. As for further functionality of the shell we assume the files used end
+in a null terminators. We also assume the need for only input/output redirection and piping.
+
+Design
+The program is divided into a few key portion.
+Before I can go about executing commands I need to know what I am executing and how to do so.
+gets_args waits for user input and form an array of arguments and special characters. I will
+take in this array Ex. [ "ls", "-la", ">", "file", ";", "cat", "test", "|",  "sort" ] and loop it while
+storing each string in a temp array called args. Once I have hit a semicolon or the end of the array I save
+the args array for later processing. Now I have formed the array args=[ "ls", "-la", ">", "file", ";" ],
+Two function will now process this information this array. setOperators() will take in args and
+figure out what operator, if any, I am dealing with. Since we know the operator we can fingure out
+what comes before and after the operator. setCommands() grabs arguments before and after
+the operator and stores them into two separate variables lCmd and rCmd for later usage.
+
+We are now left with operator = ">", lCmd = [ "ls", "-la" ] and rCmd = [ "file", ";" ]
+
+Based on the operator or special characters I can figure out how 
+we should execute the user command. In my main() function, after grabbing the operator and
+arguments, I fork() and create a child process to run my commands. Verifying pid is 0 we now
+execute the command then exit the child process. 
+
+For output redirection '>' I open the file in truncate and create mode the duplicate
+its fd into STDOUT_FILENO. This makes it so when I execute the commands a
+STDOUT goes into the specified file. For the '>>' operator I do something very
+similar, but open the file being added to with the additional append flag instead of trunc
+so the file is not truncated. For input redirection '<' I open the input file save its fd
+and dup2() its fd onto STDIN_FILENO so we can call the command with the file contents.
+
+
+For pipe I first spawn a child process to handle to pipe itself. Next I will call the pipe 
+function on int pfd[2] to initialize the pipe. If we are inside the child process I spawn a new child.
+If we are in the child I copy the write side of the pipe onto STDIN then execute the command.
+If we are in the parent I copy the read side of the pipe onto STDOUT then execute the command.
+Lastly I exit the child shells to avoid zombies.
+
+After all of these operations mentioned above I wait() off the child processes after they
+execute or write to stderr if we were unable to fork.
+
+Rather than rewrite the functions above for '&' I simply added a flag if the operator was picked up.
+If the flag was enabled, using dup2, I simply copy STDOUT onto STDERR after copying the original FD on
+STDOUT. This directs both STDOUT and STDERR to the new file.
+
+All that was mentioned above involved executing a command with one operator. After the command
+executes I set everything to NULL in my temp args array. If you recall from above we still and look at 
+the original user input [ "ls", "-la", ">", "file", ";", "cat", "test", "|",  "sort" ] we stopped at the ";"
+character. Since we have gone through one execution we continue looping through the array and add arguments
+to the emptied temp array args until we hit the end or a ";". We are now left with args being equal to
+[ "cat", "test", "|",  "sort" ]. We then continue through the process mentioned above.
+
+
+Pseudo Code:
+BEGIN PROCEDURE
+	extern get_args fuction
+
+	// Grab all operators from args
+	FUNCTION getOperator(arguments[], operators[])
+		FOR (length of arguments)
+			IF (args[i] == any operator)
+				Store operator value and position
+				set amp flag is caught
+			END IF
+		END FOR
+	END FUNCTION
+
+	// Form left and right commands associated with each operator
+	FUNCTION setCommands(args, operators, leftCommand, rightCommand)
+		IF (operator position)
+			FOR (length of args)
+				leftCommand = args before operator[i]
+				rightCommand = args after operator[i] and before operator[i+1]
+			END FOR
+		END IF
+		IF (no operator position)
+			FOR (length fo args)
+				leftCommand = args[0]..args[length of args]
+			END FOR
+		END IF
+	END FUNCTION
+
+	FUNCTION execPipe(leftCommand, rightCommand, pipeFD, amp_flag)
+		initialize PID to fork() // Child Process
+		IF (PID is child process)
+			duplicate pipeFD[READ] onto STDIN
+			close(pipeFD[READ])
+			execute rightCommand
+		ELSE
+			duplicate pipeFD[WRITE] onto STDOUT
+		
+			if (amp_flag)
+				Duplicate STDOUT onto STDERR
+			close(pipeFD[WRITE])	
+			execute leftCommand
+		END IF
+		exit
+	END FUNCTION
+
+	FUNCTION noOpCmd(leftCommand. rightCommand)
+		execute leftCommand
+		exit(0)
+	END FUNCTION
+
+	FUNCTION redirect_input(leftCommand, rightCommand, amp_flag)
+		open leftCommand file in read/write mode
+		check that it exists
+		duplicate its FD onto STDIN
+		close(file)
+		execute leftCommand
+		exit
+	END FUNCTION
+
+	FUNCTION redirect_output(leftCommand, rightCommand, amp_flag)
+		open leftCommand file in read/write, truncate and create mode
+		check that it exists
+		duplicate its FD onto STDOUT
+		if (amp_flag)
+			duplicate its STDERR onto STDOUT
+		close(file)
+		execute leftCommand
+		exit
+	END FUNCTION
+	
+	FUNCTION redirect_output_append(leftCommand, rightCommand, amp_flag)
+		open leftCommand file in read/write, append and create mode
+		check that it exists
+		duplicate its FD onto STDOUT
+		if (amp_flag)
+			duplicate its STDERR onto STDOUT
+		close(file)
+		execute leftCommand
+		exit		
+	END FUNCTION
+	
+	FUNCTION changeDir(arg, len_args, buffer)
+		if (one argument)
+			change directory to location where shell was launched
+		if (two arguments)
+			change directory to specified path
+		check if successful
+		if (more than 2 arguments)
+			write to stderr, too many arguments
+	END FUNCTION
+	
+	
+	
+	FUNCTION main()
+		initialize pid_t process id
+		initialize char **arguments
+		initialize char *args[256]
+		initialize int i
+		initialize int fd
+		initialize int pipeFD
+		initialize int status
+		initialize char *operator
+		initialize char *rightCommand[1024]
+		initialize char *leftCommand[1024]
+		initialize char buffer[1024]
+		
+		set current working directory to buffer 
+
+		WHILE(true)
+			
+			count -> 0
+			amp_flag -> 0
+			set user arguments array -> arguments
+			
+			FOR each argument
+				set arg[count++] to argument[i]
+				IF (argument[i] == ";" || at end of arguments array)
+				
+					// Get all operators
+					setOperator(args, operator)
+
+					// Get commands to left and right of current operator
+					setCommands(args, leftCommand, rightCommand)
+					
+					IF (operator == "cd")
+						changeDir(arg[1], len_args, buffer)
+					END IF
+					
+					// fork a child process
+					fork -> pid	
+					
+					IF (inside child process)
+						IF (no operator)
+							noOpCmd(leftCommand)
+						ELSE IF (operator == "<")
+							redirect_input(leftCommand, rightCommand)
+						ELSE IF (operator == ">")
+							redirect_output(leftCommand, rightCommand, amp_flag);
+						ELSE IF (operator == ">>")
+							redirect_output_append(leftCommand, rightCommand, amp_flag);
+						ELSE IF (operator == "|")
+							fork() -> pid
+							IF (in child process)
+								execPipe(leftCommand, rightCommand, pipeFD, amp_flag);
+							ELSE
+								// Do nothing	
+							END IF
+						END IF
+					ELSE IF (not in child process)
+						wait on status
+					ELSE
+						write error telling user unable to fork
+					END IF
+					loop through args array and set all values to NULL
+					0 -> count
+				END IF	
+			END FOR
+		END WHILE
+	END FUNCTION
+END PROCEDURE
+
+
+References
+
+Used to understand redirecting file streams and the dup/dup2 function
+https://www.cs.rutgers.edu/~pxk/416/notes/c-tutorials/dup2.html
+
+Used to understand the pipe function and how it passes data between processes
+https://www.cs.rutgers.edu/~pxk/416/notes/c-tutorials/pipe.html
